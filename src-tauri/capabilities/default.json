@@ -1,0 +1,15 @@
+{
+  "identifier": "default",
+  "description": "Default capability for OpenClaw Desktop",
+  "windows": ["*"],
+  "permissions": [
+    "core:default",
+    "shell:allow-open",
+    "fs:default",
+    "dialog:default",
+    "clipboard-manager:default",
+    "core:event:default",
+    "core:event:allow-listen",
+    "core:event:allow-emit"
+  ]
+}

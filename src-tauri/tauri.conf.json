@@ -1,0 +1,36 @@
+{
+  "$schema": "https://raw.githubusercontent.com/nicedoc/tauri-conf/main/schema.json",
+  "productName": "OpenClaw Desktop",
+  "version": "2.0.0",
+  "identifier": "ai.openclaw.desktop",
+  "build": {
+    "frontendDist": "../src",
+    "devUrl": "http://localhost:1420"
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "windows": [
+      {
+        "title": "🐾 OpenClaw Desktop",
+        "width": 900,
+        "height": 700,
+        "minWidth": 600,
+        "minHeight": 400,
+        "decorations": true,
+        "transparent": false,
+        "resizable": true,
+        "center": true
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "plugins": {
+    "shell": { "open": true },
+    "fs": {
+      "scope": { "allow": ["**"], "deny": [] }
+    },
+    "clipboard-manager": { "all": true }
+  }
+}

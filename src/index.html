@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>🐾 OpenClaw Desktop</title>
+  <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.11.1/styles/github-dark.min.css">
+</head>
+<body>
+  <!-- Settings overlay -->
+  <div id="settings-overlay" class="settings-overlay hidden">
+    <div class="settings-panel">
+      <div class="settings-header">
+        <h2>⚙️ Connection Settings</h2>
+        <button id="settings-close" class="icon-btn">&times;</button>
+      </div>
+      <div class="settings-body">
+        <label for="setting-url">Gateway WebSocket URL</label>
+        <input type="text" id="setting-url" placeholder="ws://100.124.75.56:18791" spellcheck="false">
+        <label for="setting-token">Auth Token</label>
+        <input type="password" id="setting-token" placeholder="Gateway token" spellcheck="false">
+        <label for="setting-password">Password (fallback)</label>
+        <input type="password" id="setting-password" placeholder="Password" spellcheck="false">
+        <div class="settings-actions">
+          <button id="settings-save" class="btn btn-primary">Save & Reconnect</button>
+          <button id="settings-cancel" class="btn btn-secondary">Cancel</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Drop overlay -->
+  <div id="drop-overlay" class="drop-overlay hidden">
+    <div class="drop-content">
+      <div class="drop-icon">📎</div>
+      <div class="drop-text">Drop files to attach</div>
+    </div>
+  </div>
+
+  <!-- Main layout -->
+  <div class="app-container">
+    <!-- Header -->
+    <header class="app-header">
+      <div class="header-left">
+        <span class="logo">🐾</span>
+        <span class="app-title">OpenClaw Desktop</span>
+        <span id="connection-badge" class="badge badge-disconnected">Disconnected</span>
+      </div>
+      <div class="header-right">
+        <button id="settings-btn" class="icon-btn" title="Settings">⚙️</button>
+      </div>
+    </header>
+
+    <!-- Chat area -->
+    <main id="chat-container" class="chat-container">
+      <div id="chat-messages" class="chat-messages">
+        <div class="welcome-msg">
+          <div class="welcome-icon">🐾</div>
+          <div class="welcome-text">OpenClaw Desktop v2</div>
+          <div class="welcome-sub">Connect to your gateway to start chatting</div>
+        </div>
+      </div>
+    </main>
+
+    <!-- Attachment preview bar -->
+    <div id="attachment-bar" class="attachment-bar hidden">
+      <div id="attachment-chips" class="attachment-chips"></div>
+    </div>
+
+    <!-- Input area -->
+    <footer class="input-area">
+      <div class="input-row">
+        <button id="attach-btn" class="icon-btn" title="Attach file">📎</button>
+        <div class="input-wrapper">
+          <textarea id="message-input" placeholder="Message Claw... (Shift+Enter for newline)" rows="1" autofocus></textarea>
+        </div>
+        <button id="send-btn" class="send-btn" title="Send (Enter)">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+        </button>
+        <button id="abort-btn" class="abort-btn hidden" title="Stop generation">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>
+        </button>
+      </div>
+    </footer>
+  </div>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.11.1/highlight.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/15.0.4/marked.min.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

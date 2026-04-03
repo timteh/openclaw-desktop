@@ -21,14 +21,6 @@ struct AppState {
     msg_id: Arc<Mutex<u64>>,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
-struct Attachment {
-    name: String,
-    content: String, // base64
-    #[serde(rename = "mimeType")]
-    mime_type: String,
-}
-
 #[derive(Debug, Serialize, Clone)]
 struct WsStatus {
     connected: bool,

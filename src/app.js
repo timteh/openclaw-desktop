@@ -120,27 +120,14 @@
 
     ws.onopen = () => {
       reconnectAttempt = 0;
-      // Build connect params per gateway protocol
-      const connectParams = {
-        minProtocol: 3,
-        maxProtocol: 3,
-        client: {
-          id: 'openclaw-desktop-v2',
-          version: '2.0.0',
-          platform: navigator?.platform || 'desktop',
-          mode: 'webchat'
-        },
-        role: 'operator',
-        scopes: ['operator.admin', 'operator.read', 'operator.write', 'operator.approvals', 'operator.pairing'],
-        caps: ['tool-events'],
-        userAgent: 'OpenClaw Desktop v2'
-      };
-      if (settings.token) {
-        connectParams.auth = { token: settings.token };
-      } else if (settings.password) {
-        connectParams.auth = { password: settings.password };
-      }
-      wsSend('connect', connectParams);
+      // Gateway sends connect.challenge event first, then we respond with connect
+      // sendConnect() is called from handleMessage when challenge arrives
+      // But some gateways may not send a challenge — use a timeout fallback
+      setTimeout(() => {
+        if (!connected && ws && ws.readyState === WebSocket.OPEN) {
+          sendConnect();
+        }
+      }, 2000);
     };
 
     ws.onmessage = (event) => {
@@ -243,9 +230,40 @@
     heartbeatTimer = null;
   }
 
+  function sendConnect() {
+    const settings = loadSettings();
+    const connectParams = {
+      minProtocol: 3,
+      maxProtocol: 3,
+      client: {
+        id: 'openclaw-desktop-v2',
+        version: '2.0.0',
+        platform: 'desktop',
+        mode: 'webchat'
+      },
+      role: 'operator',
+      scopes: ['operator.admin', 'operator.read', 'operator.write', 'operator.approvals', 'operator.pairing'],
+      caps: ['tool-events'],
+      userAgent: 'OpenClaw Desktop v2',
+      locale: 'en-US'
+    };
+    if (settings.token) {
+      connectParams.auth = { token: settings.token };
+    } else if (settings.password) {
+      connectParams.auth = { password: settings.password };
+    }
+    wsSend('connect', connectParams);
+  }
+
   // ---- Message handling ----
   function handleMessage(data) {
     // Gateway protocol: { type: "res", id, ok, payload/error } or { type: "event", event, payload }
+
+    // Handle connect.challenge — gateway sends this before we can send connect
+    if (data.type === 'event' && data.event === 'connect.challenge') {
+      sendConnect();
+      return;
+    }
 
     // Handle responses
     if (data.type === 'res') {

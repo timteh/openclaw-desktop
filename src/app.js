@@ -120,14 +120,27 @@
 
     ws.onopen = () => {
       reconnectAttempt = 0;
-      // Send auth
-      const authParams = { sender: { id: 'openclaw-desktop-v2', name: 'OpenClaw Desktop' } };
+      // Build connect params per gateway protocol
+      const connectParams = {
+        minProtocol: 3,
+        maxProtocol: 3,
+        client: {
+          id: 'openclaw-desktop-v2',
+          version: '2.0.0',
+          platform: navigator?.platform || 'desktop',
+          mode: 'webchat'
+        },
+        role: 'operator',
+        scopes: ['operator.admin', 'operator.read', 'operator.write', 'operator.approvals', 'operator.pairing'],
+        caps: ['tool-events'],
+        userAgent: 'OpenClaw Desktop v2'
+      };
       if (settings.token) {
-        authParams.auth = { token: settings.token };
+        connectParams.auth = { token: settings.token };
       } else if (settings.password) {
-        authParams.auth = { password: settings.password };
+        connectParams.auth = { password: settings.password };
       }
-      wsSend('connect', authParams);
+      wsSend('connect', connectParams);
     };
 
     ws.onmessage = (event) => {
@@ -153,10 +166,17 @@
     };
   }
 
+  function uuidv4() {
+    return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
+      const r = Math.random() * 16 | 0;
+      return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16);
+    });
+  }
+
   function wsSend(method, params = {}) {
     if (!ws || ws.readyState !== WebSocket.OPEN) return null;
-    const id = ++msgId;
-    ws.send(JSON.stringify({ jsonrpc: '2.0', id, method, params }));
+    const id = uuidv4();
+    ws.send(JSON.stringify({ type: 'req', id, method, params }));
     return id;
   }
 
@@ -196,11 +216,24 @@
     }
   }
 
+  // Extract text from message content (handles string or content array)
+  function extractText(msg) {
+    if (typeof msg.content === 'string') return msg.content;
+    if (typeof msg.text === 'string') return msg.text;
+    if (Array.isArray(msg.content)) {
+      return msg.content
+        .filter(c => c.type === 'text')
+        .map(c => c.text)
+        .join('\n');
+    }
+    return '';
+  }
+
   function startHeartbeat() {
     stopHeartbeat();
     heartbeatTimer = setInterval(() => {
       if (ws && ws.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify({ jsonrpc: '2.0', method: 'ping' }));
+        wsSend('ping', {});
       }
     }, HEARTBEAT_INTERVAL);
   }
@@ -212,49 +245,65 @@
 
   // ---- Message handling ----
   function handleMessage(data) {
-    // Handle connect response
-    if (data.id && data.result && !connected) {
-      connected = true;
-      setConnectionStatus('connected');
-      startHeartbeat();
-      // Fetch history
-      wsSend('chat.history', { limit: 50 });
-      return;
-    }
+    // Gateway protocol: { type: "res", id, ok, payload/error } or { type: "event", event, payload }
 
-    // Handle chat.history response
-    if (data.result && Array.isArray(data.result.messages)) {
-      // Clear welcome message
-      const welcome = chatMessages.querySelector('.welcome-msg');
-      if (welcome) welcome.remove();
-      
-      data.result.messages.forEach(msg => {
-        if (msg.role === 'user') {
-          addUserMessage(msg.content || msg.text || '', msg.attachments);
-        } else if (msg.role === 'assistant') {
-          addAssistantMessage(msg.content || msg.text || '');
+    // Handle responses
+    if (data.type === 'res') {
+      if (!data.ok) {
+        const errMsg = data.error?.message || JSON.stringify(data.error);
+        if (!connected) {
+          setConnectionStatus('disconnected', errMsg);
+        } else {
+          addSystemMessage(`Error: ${errMsg}`);
         }
-      });
-      scrollToBottom(true);
-      return;
-    }
+        return;
+      }
 
-    // Handle chat.send ack
-    if (data.result && data.result.runId) {
-      currentRunId = data.result.runId;
-      if (data.result.status === 'started') {
-        showAbortBtn(true);
+      // Connect response
+      if (!connected && data.payload) {
+        connected = true;
+        setConnectionStatus('connected');
+        startHeartbeat();
+        wsSend('chat.history', { limit: 50 });
+        return;
+      }
+
+      // chat.history response
+      if (data.payload && Array.isArray(data.payload.messages)) {
+        const welcome = chatMessages.querySelector('.welcome-msg');
+        if (welcome) welcome.remove();
+        
+        data.payload.messages.forEach(msg => {
+          if (msg.role === 'user') {
+            addUserMessage(extractText(msg), msg.attachments);
+          } else if (msg.role === 'assistant') {
+            addAssistantMessage(extractText(msg));
+          }
+        });
+        scrollToBottom(true);
+        return;
+      }
+
+      // chat.send ack
+      if (data.payload && data.payload.runId) {
+        currentRunId = data.payload.runId;
+        if (data.payload.status === 'started') {
+          showAbortBtn(true);
+        }
+        return;
       }
       return;
     }
 
-    // Handle streaming events (notifications — no id)
-    if (data.method === 'chat') {
-      handleChatEvent(data.params);
+    // Handle events
+    if (data.type === 'event') {
+      if (data.event === 'chat') {
+        handleChatEvent(data.payload);
+      }
       return;
     }
 
-    // Handle errors
+    // Legacy fallback for any other format
     if (data.error) {
       addSystemMessage(`Error: ${data.error.message || JSON.stringify(data.error)}`);
       return;
@@ -264,40 +313,38 @@
   function handleChatEvent(params) {
     if (!params) return;
 
-    const type = params.type || params.event;
+    // Gateway chat events have params.state: 'delta' | 'final' | 'aborted' | 'error'
+    const state = params.state;
 
-    switch (type) {
-      case 'delta':
-      case 'content_block_delta':
-        handleDelta(params.text || params.delta?.text || '');
+    switch (state) {
+      case 'delta': {
+        // Extract text from message content
+        const text = extractText(params.message || {});
+        if (text) handleDelta(text);
         break;
+      }
 
-      case 'message':
-      case 'message_complete':
       case 'final':
         handleFinalMessage(params);
         break;
 
-      case 'tool_use':
-      case 'tool_call':
-        handleToolCall(params);
-        break;
-
-      case 'tool_result':
-        handleToolResult(params);
-        break;
-
-      case 'thinking':
-        // Silently ignore thinking events
+      case 'aborted':
+        finishStreaming();
+        addSystemMessage('Response aborted.');
         break;
 
       case 'error':
-        addSystemMessage(`Stream error: ${params.message || params.text || 'Unknown'}`);
+        addSystemMessage(`Stream error: ${params.errorMessage || 'Unknown'}`);
         finishStreaming();
         break;
 
-      case 'done':
-      case 'end':
+      default:
+        // Legacy format fallback
+        if (params.type === 'delta' || params.event === 'delta') {
+          handleDelta(params.text || params.delta?.text || '');
+        } else if (params.type === 'final' || params.type === 'message') {
+          handleFinalMessage(params);
+        }
       case 'run_complete':
         finishStreaming();
         break;
@@ -333,10 +380,10 @@
   }
 
   function handleFinalMessage(params) {
-    const content = params.content || params.text || '';
+    const content = extractText(params.message || params) || params.content || params.text || '';
     if (streamingMsgEl) {
       // Finalize streaming message
-      streamBuffer = content || streamBuffer;
+      if (content) streamBuffer = content;
       renderStreamContent();
       finishStreaming();
     } else if (content) {
@@ -344,6 +391,8 @@
       const welcome = chatMessages.querySelector('.welcome-msg');
       if (welcome) welcome.remove();
       addAssistantMessage(content);
+    } else {
+      finishStreaming();
     }
   }
 
@@ -507,14 +556,17 @@
     // Show user message
     addUserMessage(text, pendingAttachments.map(a => ({ name: a.name })));
 
-    // Build params
-    const params = {};
-    if (text) params.message = text;
+    // Build params — deliver:false means we receive the response via events
+    const params = {
+      message: text || '',
+      deliver: false,
+      idempotencyKey: uuidv4(),
+    };
     if (pendingAttachments.length > 0) {
       params.attachments = pendingAttachments.map(a => ({
-        name: a.name,
-        content: a.content,
+        type: 'image',
         mimeType: a.mimeType,
+        content: a.content,
       }));
     }
 

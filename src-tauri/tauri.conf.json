@@ -4,9 +4,7 @@
   "version": "2.0.0",
   "identifier": "ai.openclaw.desktop",
   "build": {
-    "frontendDist": "../src",
-    "devUrl": "http://localhost:1420",
-    "beforeDevCommand": "npx serve src -l 1420 --no-clipboard"
+    "frontendDist": "../src"
   },
   "app": {
     "withGlobalTauri": true,

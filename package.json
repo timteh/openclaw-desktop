@@ -5,6 +5,7 @@
   "private": true,
   "scripts": {
     "tauri": "tauri",
+    "serve": "npx serve src -l 1420 --no-clipboard",
     "dev": "tauri dev",
     "build": "tauri build",
     "build:win": "tauri build --target x86_64-pc-windows-msvc"
@@ -14,7 +15,8 @@
   },
   "dependencies": {
     "@tauri-apps/api": "^2",
+    "highlight.js": "^11.11.0",
     "marked": "^15.0.0",
-    "highlight.js": "^11.11.0"
+    "serve": "^14.2.6"
   }
 }

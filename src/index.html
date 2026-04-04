@@ -68,13 +68,28 @@
       <div id="attachment-chips" class="attachment-chips"></div>
     </div>
 
+    <!-- Confirm dialog -->
+    <div id="confirm-overlay" class="confirm-overlay hidden">
+      <div class="confirm-dialog">
+        <h3 id="confirm-title">Confirm</h3>
+        <p id="confirm-message">Are you sure?</p>
+        <div class="confirm-actions">
+          <button id="confirm-cancel" class="confirm-cancel">Cancel</button>
+          <button id="confirm-proceed" class="confirm-proceed">Proceed</button>
+        </div>
+      </div>
+    </div>
+
     <!-- Input area -->
     <footer class="input-area">
+      <div id="command-toasts" class="command-toasts"></div>
+      <div id="command-menu" class="command-menu hidden"></div>
       <div class="input-row">
-        <button id="attach-btn" class="icon-btn" title="Attach file">📎</button>
+        <button id="menu-btn" class="menu-button" title="Commands (/)">☰</button>
         <div class="input-wrapper">
           <textarea id="message-input" placeholder="Message Claw... (Shift+Enter for newline)" rows="1" autofocus></textarea>
         </div>
+        <button id="attach-btn" class="icon-btn" title="Attach file">📎</button>
         <button id="send-btn" class="send-btn" title="Send (Enter)">
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
         </button>

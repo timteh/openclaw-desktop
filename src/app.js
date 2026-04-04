@@ -825,13 +825,9 @@
       files.forEach(file => {
         const chip = document.createElement('div');
         chip.className = 'file-chip';
-        chip.innerHTML = `<span class="file-icon">${getFileIcon(file.fileName)}</span><span class="file-name">${escapeHtml(file.fileName)}</span>`;
-        const dlBtn = document.createElement('button');
-        dlBtn.className = 'file-download-btn';
-        dlBtn.textContent = '⬇️';
-        dlBtn.title = `Download ${file.fileName}`;
-        dlBtn.onclick = (e) => { e.stopPropagation(); downloadFile(file.url, file.fileName); };
-        chip.appendChild(dlBtn);
+        chip.innerHTML = `<span class="file-icon">${getFileIcon(file.fileName)}</span><span class="file-name">${escapeHtml(file.fileName)}</span><span class="file-download-btn">⬇️</span>`;
+        chip.title = `Download ${file.fileName}`;
+        chip.onclick = () => downloadFile(file.url, file.fileName);
         container.appendChild(chip);
       });
       contentEl.appendChild(container);
@@ -842,18 +838,31 @@
     const resolved = url && url.startsWith('http') ? url : resolveMediaUrl(url);
     if (!resolved) { addSystemMessage('Cannot download: unknown path'); return; }
     try {
+      // Try fetch + blob download first
       const response = await fetch(resolved);
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const blob = await response.blob();
+      const blobUrl = URL.createObjectURL(blob);
       const a = document.createElement('a');
-      a.href = URL.createObjectURL(blob);
+      a.href = blobUrl;
       a.download = fileName || resolved.split('/').pop() || 'download';
+      a.style.display = 'none';
       document.body.appendChild(a);
       a.click();
-      a.remove();
-      URL.revokeObjectURL(a.href);
+      setTimeout(() => { a.remove(); URL.revokeObjectURL(blobUrl); }, 1000);
     } catch (e) {
-      addSystemMessage(`Download failed: ${e.message}`);
+      // Fallback: open in system browser via Tauri opener or window.open
+      try {
+        if (window.__TAURI__?.opener?.openUrl) {
+          await window.__TAURI__.opener.openUrl(resolved);
+          addSystemMessage(`Opening ${fileName || 'file'} in browser...`);
+        } else {
+          window.open(resolved, '_blank');
+          addSystemMessage(`Opening ${fileName || 'file'} in browser...`);
+        }
+      } catch (e2) {
+        addSystemMessage(`Download failed: ${e.message}`);
+      }
     }
   }
 

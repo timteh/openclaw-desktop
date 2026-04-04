@@ -8,6 +8,7 @@
   const DEFAULT_URL = 'ws://100.124.75.56:18791';
   const DEFAULT_TOKEN = '2f82c41c9fa07294686be9171f31e316224f679d58d875eb';
   const DEFAULT_PASSWORD = 'tim0teh';
+  const FILE_SERVER_BASE = 'http://100.124.75.56:18789/files';
   const HEARTBEAT_INTERVAL = 15000;
   const RECONNECT = { initialMs: 500, maxMs: 10000, factor: 1.5, jitter: 0.3, maxAttempts: 20 };
 
@@ -17,6 +18,7 @@
   let msgId = 1;
   let connected = false;
   let sessionKey = null;
+  let deviceToken = null;
   let isStreaming = false;
   let streamingMsgEl = null;
   let streamBuffer = '';
@@ -264,9 +266,11 @@
         deviceFamily: 'Windows'
       },
       role: 'operator',
-      scopes: ['operator.admin'],
-      caps: ['tool-events'],
-      userAgent: 'OpenClaw Desktop v2',
+      scopes: ['operator.admin', 'operator.read', 'operator.write', 'operator.approvals', 'operator.pairing'],
+      caps: ['tool_events'],
+      commands: [],
+      permissions: {},
+      userAgent: 'openclaw-control-ui/1.0.0',
       locale: 'en-US'
     };
     if (nonce) {
@@ -276,7 +280,7 @@
             clientId: 'openclaw-control-ui',
             clientMode: 'ui',
             role: 'operator',
-            scopes: ['operator.admin'],
+            scopes: ['operator.admin', 'operator.read', 'operator.write', 'operator.approvals', 'operator.pairing'],
             token: settings.token || '',
             nonce: nonce,
             platform: 'win32',
@@ -318,6 +322,9 @@
       return;
     }
     sessionKey = key;
+    // Subscribe to streaming events
+    try { await rpcCall('sessions.subscribe', {}); } catch (e) { console.warn('sessions.subscribe:', e.message); }
+    try { await rpcCall('sessions.messages.subscribe', { key: sessionKey }); } catch (e) { console.warn('sessions.messages.subscribe:', e.message); }
     wsSend('chat.history', { sessionKey, limit: 50 });
   }
 
@@ -359,6 +366,10 @@
       // Connect response
       if (!connected && data.payload && data.payload.type === 'hello-ok') {
         connected = true;
+        if (data.payload.auth?.deviceToken) {
+          deviceToken = data.payload.auth.deviceToken;
+          localStorage.setItem('oc_deviceToken', deviceToken);
+        }
         setConnectionStatus('connected');
         setupSession();
         return;
@@ -419,9 +430,9 @@
 
     switch (state) {
       case 'delta': {
-        // Extract text from message content
+        // Accumulated text — replace buffer
         const text = extractText(params.message || {});
-        if (text) handleDelta(text);
+        if (text) handleDelta(text, true);
         break;
       }
 
@@ -458,7 +469,7 @@
     }
   }
 
-  function handleDelta(text) {
+  function handleDelta(text, replace) {
     if (!text) return;
 
     // Clear welcome message
@@ -470,7 +481,7 @@
       streamBuffer = '';
     }
 
-    streamBuffer += text;
+    streamBuffer = replace ? text : streamBuffer + text;
     isStreaming = true;
     showAbortBtn(true);
     renderStreamContent();
@@ -570,6 +581,7 @@
           contentEl.textContent = streamBuffer;
         }
         toolCalls.forEach(tc => contentEl.appendChild(tc));
+        renderFileChips(contentEl, streamBuffer);
       }
     }
     streamingMsgEl = null;
@@ -626,6 +638,7 @@
     } catch (e) {
       contentEl.textContent = content;
     }
+    renderFileChips(contentEl, content);
     autoScroll();
     return el;
   }
@@ -636,6 +649,91 @@
     el.textContent = text;
     chatMessages.appendChild(el);
     autoScroll();
+  }
+
+  // ---- File detection & download ----
+  const FILE_PATTERNS = [
+    /MEDIA:(\S+)/g,
+    /(?:saved to|generated at|wrote to|created|File:)\s+[`"]?(\S+\.(?:pdf|docx|xlsx|pptx|png|jpg|jpeg|gif|txt|md|csv|json))[`"]?/gi,
+    /\/root\/\.openclaw\/workspace\/[^\s`"]+\.(?:pdf|docx|xlsx|pptx|png|jpg|jpeg|gif|txt|md|csv|json)/g,
+    /\/root\/\.openclaw\/media\/[^\s`"]+\.(?:pdf|docx|xlsx|pptx|png|jpg|jpeg|gif|txt|md|csv|json)/g,
+    /\/tmp\/[^\s`"]+\.(?:pdf|docx|xlsx|pptx|png|jpg|jpeg|gif|txt|md|csv|json)/g,
+  ];
+
+  function mapServerPathToUrl(serverPath) {
+    if (serverPath.startsWith('/root/.openclaw/workspace/')) {
+      return `${FILE_SERVER_BASE}/workspace/${serverPath.replace('/root/.openclaw/workspace/', '')}`;
+    }
+    if (serverPath.startsWith('/root/.openclaw/media/')) {
+      return `${FILE_SERVER_BASE}/media/${serverPath.replace('/root/.openclaw/media/', '')}`;
+    }
+    return null;
+  }
+
+  function detectFileReferences(text) {
+    const files = new Set();
+    for (const pattern of FILE_PATTERNS) {
+      pattern.lastIndex = 0;
+      let match;
+      while ((match = pattern.exec(text)) !== null) {
+        const path = match[1] || match[0];
+        if (path) files.add(path.replace(/[`"]/g, ''));
+      }
+    }
+    return [...files];
+  }
+
+  function getFileIcon(name) {
+    const ext = (name.split('.').pop() || '').toLowerCase();
+    if (['png', 'jpg', 'jpeg', 'gif', 'webp'].includes(ext)) return '🖼️';
+    if (ext === 'pdf') return '📄';
+    if (['docx', 'doc'].includes(ext)) return '📝';
+    if (['xlsx', 'xls', 'csv'].includes(ext)) return '📊';
+    if (['md', 'txt'].includes(ext)) return '📃';
+    return '📎';
+  }
+
+  function renderFileChips(contentEl, text) {
+    const files = detectFileReferences(text);
+    if (files.length === 0) return;
+    const container = document.createElement('div');
+    container.className = 'file-chips-container';
+    files.forEach(path => {
+      const name = path.split('/').pop();
+      const url = mapServerPathToUrl(path);
+      const chip = document.createElement('div');
+      chip.className = 'file-chip';
+      chip.innerHTML = `<span class="file-icon">${getFileIcon(name)}</span><span class="file-name">${escapeHtml(name)}</span>`;
+      if (url) {
+        const dlBtn = document.createElement('button');
+        dlBtn.className = 'file-download-btn';
+        dlBtn.textContent = '⬇️';
+        dlBtn.title = 'Save to computer';
+        dlBtn.onclick = (e) => { e.stopPropagation(); downloadFile(path); };
+        chip.appendChild(dlBtn);
+      }
+      container.appendChild(chip);
+    });
+    contentEl.appendChild(container);
+  }
+
+  async function downloadFile(serverPath) {
+    const url = mapServerPathToUrl(serverPath);
+    if (!url) { addSystemMessage('Cannot download: unknown path'); return; }
+    try {
+      const response = await fetch(url);
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const blob = await response.blob();
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = serverPath.split('/').pop();
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(a.href);
+    } catch (e) {
+      addSystemMessage(`Download failed: ${e.message}`);
+    }
   }
 
   // ---- Send message ----
@@ -663,8 +761,9 @@
     };
     if (pendingAttachments.length > 0) {
       params.attachments = pendingAttachments.map(a => ({
-        type: 'image',
+        type: a.mimeType.startsWith('image/') ? 'image' : 'file',
         mimeType: a.mimeType,
+        fileName: a.name,
         content: a.content,
       }));
     }

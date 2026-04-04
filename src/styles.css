@@ -615,6 +615,38 @@ html, body {
 }
 .file-download-btn:hover { background: var(--bg-hover); }
 
+/* ---- Image previews ---- */
+.msg-image-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 10px 0;
+}
+.msg-image-preview {
+  position: relative;
+  max-width: 300px;
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  cursor: pointer;
+  border: 1px solid var(--border);
+}
+.msg-image-preview img {
+  width: 100%;
+  height: auto;
+  display: block;
+}
+.msg-image-preview .img-overlay {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  opacity: 0;
+  transition: opacity 0.2s;
+  background: rgba(0, 0, 0, 0.6);
+  border-radius: 4px;
+  padding: 4px;
+}
+.msg-image-preview:hover .img-overlay { opacity: 1; }
+
 /* ---- Command Menu Palette ---- */
 .command-menu {
   position: absolute;

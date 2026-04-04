@@ -396,7 +396,7 @@
           if (msg.role === 'user') {
             addUserMessage(text, msg.attachments);
           } else if (msg.role === 'assistant') {
-            addAssistantMessage(text);
+            addAssistantMessage(text, msg);
           }
         });
         scrollToBottom(true);
@@ -670,7 +670,7 @@
     return el;
   }
 
-  function addAssistantMessage(content) {
+  function addAssistantMessage(content, msgObj) {
     const el = createMessageElement('assistant');
     const contentEl = el.querySelector('.msg-content');
     try {
@@ -678,7 +678,7 @@
     } catch (e) {
       contentEl.textContent = content;
     }
-    renderFileChips(contentEl, content);
+    renderFileChips(contentEl, content, msgObj);
     autoScroll();
     return el;
   }
@@ -694,79 +694,160 @@
   // ---- File detection & download ----
   const FILE_PATTERNS = [
     /MEDIA:(\S+)/g,
-    /(?:saved to|generated at|wrote to|created|File:)\s+[`"]?(\S+\.(?:pdf|docx|xlsx|pptx|png|jpg|jpeg|gif|txt|md|csv|json))[`"]?/gi,
-    /\/root\/\.openclaw\/workspace\/[^\s`"]+\.(?:pdf|docx|xlsx|pptx|png|jpg|jpeg|gif|txt|md|csv|json)/g,
-    /\/root\/\.openclaw\/media\/[^\s`"]+\.(?:pdf|docx|xlsx|pptx|png|jpg|jpeg|gif|txt|md|csv|json)/g,
-    /\/tmp\/[^\s`"]+\.(?:pdf|docx|xlsx|pptx|png|jpg|jpeg|gif|txt|md|csv|json)/g,
+    /(?:saved to|generated at|wrote to|created|File:)\s+[`"]?(\S+\.(?:pdf|docx|xlsx|pptx|png|jpg|jpeg|gif|webp|txt|md|csv|json|zip|tar|gz))[`"]?/gi,
+    /\/root\/\.openclaw\/workspace\/[^\s`")\]]+/g,
+    /\/root\/\.openclaw\/media\/[^\s`")\]]+/g,
+    /\/tmp\/[^\s`")\]]+\.(?:pdf|docx|xlsx|pptx|png|jpg|jpeg|gif|webp|txt|md|csv|json|zip)/g,
   ];
+  const MD_LINK_RE = /\[([^\]]+)\]\((sandbox:)?([^)]+)\)/g;
 
-  function mapServerPathToUrl(serverPath) {
-    if (serverPath.startsWith('/root/.openclaw/workspace/')) {
-      return `${FILE_SERVER_BASE}/workspace/${serverPath.replace('/root/.openclaw/workspace/', '')}`;
-    }
-    if (serverPath.startsWith('/root/.openclaw/media/')) {
-      return `${FILE_SERVER_BASE}/media/${serverPath.replace('/root/.openclaw/media/', '')}`;
-    }
+  function resolveMediaUrl(ref) {
+    if (!ref) return null;
+    ref = ref.replace(/^sandbox:/, '');
+    if (ref.startsWith('http://') || ref.startsWith('https://')) return ref;
+    if (ref.startsWith('/root/.openclaw/workspace/'))
+      return `${FILE_SERVER_BASE}/workspace/${ref.slice('/root/.openclaw/workspace/'.length)}`;
+    if (ref.startsWith('/root/.openclaw/media/'))
+      return `${FILE_SERVER_BASE}/media/${ref.slice('/root/.openclaw/media/'.length)}`;
+    if (ref.startsWith('/tmp/'))
+      return `${FILE_SERVER_BASE}/workspace${ref}`;
+    if (ref.match(/\.\w{2,5}$/))
+      return `${FILE_SERVER_BASE}/media/outbound/${ref}`;
     return null;
   }
 
   function detectFileReferences(text) {
+    if (!text) return [];
     const files = new Set();
     for (const pattern of FILE_PATTERNS) {
       pattern.lastIndex = 0;
-      let match;
-      while ((match = pattern.exec(text)) !== null) {
-        const path = match[1] || match[0];
-        if (path) files.add(path.replace(/[`"]/g, ''));
+      let m;
+      while ((m = pattern.exec(text)) !== null) {
+        const p = (m[1] || m[0]).replace(/[`"]/g, '');
+        if (p) files.add(p);
       }
+    }
+    MD_LINK_RE.lastIndex = 0;
+    let mdm;
+    while ((mdm = MD_LINK_RE.exec(text)) !== null) {
+      if (mdm[3] && /\.(csv|pdf|xlsx|docx|json|txt|md|png|jpg|jpeg|gif|webp|zip|tar|gz)$/i.test(mdm[3]))
+        files.add(mdm[3]);
     }
     return [...files];
   }
 
+  function extractAttachments(msg) {
+    const atts = [];
+    if (!msg) return atts;
+    if (Array.isArray(msg.attachments)) {
+      for (const a of msg.attachments) {
+        const path = a.url || a.path || a.MediaPath || '';
+        atts.push({
+          fileName: a.fileName || a.name || path.split('/').pop() || 'file',
+          mimeType: a.mimeType || a.contentType || guessMime(path),
+          url: resolveMediaUrl(path),
+          content: a.content,
+        });
+      }
+    }
+    if (msg.MediaPath) atts.push({ fileName: msg.MediaPath.split('/').pop(), mimeType: guessMime(msg.MediaPath), url: resolveMediaUrl(msg.MediaPath) });
+    if (Array.isArray(msg.MediaPaths)) msg.MediaPaths.forEach(p => atts.push({ fileName: p.split('/').pop(), mimeType: guessMime(p), url: resolveMediaUrl(p) }));
+    if (msg.mediaUrl) atts.push({ fileName: msg.mediaUrl.split('/').pop(), url: resolveMediaUrl(msg.mediaUrl) });
+    if (Array.isArray(msg.mediaUrls)) msg.mediaUrls.forEach(u => atts.push({ fileName: u.split('/').pop(), url: resolveMediaUrl(u) }));
+    return atts;
+  }
+
+  function guessMime(path) {
+    const ext = (path || '').split('.').pop()?.toLowerCase();
+    return { png:'image/png', jpg:'image/jpeg', jpeg:'image/jpeg', gif:'image/gif', webp:'image/webp',
+      pdf:'application/pdf', csv:'text/csv', json:'application/json', txt:'text/plain', md:'text/markdown' }[ext] || 'application/octet-stream';
+  }
+
   function getFileIcon(name) {
     const ext = (name.split('.').pop() || '').toLowerCase();
-    if (['png', 'jpg', 'jpeg', 'gif', 'webp'].includes(ext)) return '🖼️';
+    if (['png','jpg','jpeg','gif','webp'].includes(ext)) return '🖼️';
     if (ext === 'pdf') return '📄';
-    if (['docx', 'doc'].includes(ext)) return '📝';
-    if (['xlsx', 'xls', 'csv'].includes(ext)) return '📊';
-    if (['md', 'txt'].includes(ext)) return '📃';
+    if (['docx','doc'].includes(ext)) return '📝';
+    if (['xlsx','xls','csv'].includes(ext)) return '📊';
+    if (['md','txt'].includes(ext)) return '📃';
+    if (['zip','tar','gz'].includes(ext)) return '📦';
     return '📎';
   }
 
-  function renderFileChips(contentEl, text) {
-    const files = detectFileReferences(text);
-    if (files.length === 0) return;
-    const container = document.createElement('div');
-    container.className = 'file-chips-container';
-    files.forEach(path => {
+  function isImageFile(name) { return /\.(png|jpg|jpeg|gif|webp)$/i.test(name); }
+
+  function renderFileChips(contentEl, text, msgObj) {
+    const textFiles = detectFileReferences(text);
+    const metaAtts = extractAttachments(msgObj);
+    const seen = new Set();
+    const all = [];
+
+    for (const a of metaAtts) {
+      if (a.url && !seen.has(a.fileName)) { seen.add(a.fileName); all.push(a); }
+    }
+    for (const path of textFiles) {
       const name = path.split('/').pop();
-      const url = mapServerPathToUrl(path);
-      const chip = document.createElement('div');
-      chip.className = 'file-chip';
-      chip.innerHTML = `<span class="file-icon">${getFileIcon(name)}</span><span class="file-name">${escapeHtml(name)}</span>`;
-      if (url) {
+      if (!seen.has(name)) {
+        seen.add(name);
+        all.push({ fileName: name, url: resolveMediaUrl(path), mimeType: guessMime(path) });
+      }
+    }
+    if (all.length === 0) return;
+
+    const images = all.filter(f => f.url && isImageFile(f.fileName));
+    const files = all.filter(f => f.url && !isImageFile(f.fileName));
+
+    if (images.length > 0) {
+      const grid = document.createElement('div');
+      grid.className = 'msg-image-grid';
+      images.forEach(img => {
+        const wrap = document.createElement('div');
+        wrap.className = 'msg-image-preview';
+        const imgEl = document.createElement('img');
+        imgEl.src = img.url;
+        imgEl.alt = img.fileName;
+        imgEl.loading = 'lazy';
+        imgEl.onerror = () => wrap.remove();
+        wrap.appendChild(imgEl);
+        const ov = document.createElement('div');
+        ov.className = 'img-overlay';
+        ov.innerHTML = `<button class="file-download-btn" title="Download ${escapeHtml(img.fileName)}">⬇️</button>`;
+        ov.querySelector('button').onclick = (e) => { e.stopPropagation(); downloadFile(img.url, img.fileName); };
+        wrap.appendChild(ov);
+        grid.appendChild(wrap);
+      });
+      contentEl.appendChild(grid);
+    }
+
+    if (files.length > 0) {
+      const container = document.createElement('div');
+      container.className = 'file-chips-container';
+      files.forEach(file => {
+        const chip = document.createElement('div');
+        chip.className = 'file-chip';
+        chip.innerHTML = `<span class="file-icon">${getFileIcon(file.fileName)}</span><span class="file-name">${escapeHtml(file.fileName)}</span>`;
         const dlBtn = document.createElement('button');
         dlBtn.className = 'file-download-btn';
         dlBtn.textContent = '⬇️';
-        dlBtn.title = 'Save to computer';
-        dlBtn.onclick = (e) => { e.stopPropagation(); downloadFile(path); };
+        dlBtn.title = `Download ${file.fileName}`;
+        dlBtn.onclick = (e) => { e.stopPropagation(); downloadFile(file.url, file.fileName); };
         chip.appendChild(dlBtn);
-      }
-      container.appendChild(chip);
-    });
-    contentEl.appendChild(container);
+        container.appendChild(chip);
+      });
+      contentEl.appendChild(container);
+    }
   }
 
-  async function downloadFile(serverPath) {
-    const url = mapServerPathToUrl(serverPath);
-    if (!url) { addSystemMessage('Cannot download: unknown path'); return; }
+  async function downloadFile(url, fileName) {
+    const resolved = url && url.startsWith('http') ? url : resolveMediaUrl(url);
+    if (!resolved) { addSystemMessage('Cannot download: unknown path'); return; }
     try {
-      const response = await fetch(url);
+      const response = await fetch(resolved);
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const blob = await response.blob();
       const a = document.createElement('a');
       a.href = URL.createObjectURL(blob);
-      a.download = serverPath.split('/').pop();
+      a.download = fileName || resolved.split('/').pop() || 'download';
       document.body.appendChild(a);
       a.click();
       a.remove();

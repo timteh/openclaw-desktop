@@ -26,10 +26,6 @@
     }
   },
   "plugins": {
-    "shell": { "open": true },
-    "fs": {
-      "scope": { "allow": ["**"], "deny": [] }
-    },
-    "clipboard-manager": { "all": true }
+    "shell": { "open": true }
   }
 }

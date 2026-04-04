@@ -12,9 +12,11 @@
   const RECONNECT = { initialMs: 500, maxMs: 10000, factor: 1.5, jitter: 0.3, maxAttempts: 20 };
 
   // ---- State ----
-  let ws = null;
+  let ws = null;  // kept for readyState tracking
+  let wsConnected = false;  // Rust-side connection state
   let msgId = 1;
   let connected = false;
+  let sessionKey = null;
   let isStreaming = false;
   let streamingMsgEl = null;
   let streamBuffer = '';
@@ -24,6 +26,7 @@
   let userScrolled = false;
   let pendingAttachments = [];
   let currentRunId = null;
+  const pendingRpc = new Map();
 
   // ---- DOM refs ----
   const $ = s => document.querySelector(s);
@@ -100,57 +103,57 @@
     localStorage.setItem('oc_password', password);
   }
 
-  // ---- Connection ----
-  function connect() {
-    const settings = loadSettings();
-    if (ws) {
-      ws.close();
-      ws = null;
-    }
+  // ---- Connection (via Tauri Rust backend — bypasses origin restrictions) ----
+  const { invoke } = window.__TAURI__.core;
+  const { listen } = window.__TAURI__.event;
 
+  // Set up Tauri event listeners (once) — MUST complete before connect()
+  let listenersReady = Promise.all([
+    listen('ws-message', (event) => {
+      try {
+        const data = JSON.parse(event.payload);
+        handleMessage(data);
+      } catch (e) {
+        console.error('Parse error:', e, event.payload);
+      }
+    }),
+    listen('ws-status', (event) => {
+      const status = event.payload;
+      console.log('[ws-status]', status);
+      if (status.connected) {
+        wsConnected = true;
+        isConnecting = false;
+        reconnectAttempt = 0;
+      } else {
+        wsConnected = false;
+        connected = false;
+        sessionKey = null;
+        isConnecting = false;
+        for (const [, p] of pendingRpc) { clearTimeout(p.timer); p.reject(new Error('disconnected')); }
+        pendingRpc.clear();
+        setConnectionStatus('disconnected', status.message || 'Connection lost');
+        scheduleReconnect();
+      }
+    })
+  ]);
+
+  let isConnecting = false;
+  async function connect() {
+    if (isConnecting) return;
+    const settings = loadSettings();
+    wsConnected = false;
+    connected = false;
+    isConnecting = true;
     setConnectionStatus('connecting');
 
     try {
-      ws = new WebSocket(settings.url);
+      await invoke('ws_connect', { url: settings.url });
+      // ws-status event will fire from Rust side
     } catch (e) {
-      setConnectionStatus('disconnected', e.message);
+      isConnecting = false;
+      setConnectionStatus('disconnected', String(e));
       scheduleReconnect();
-      return;
     }
-
-    ws.onopen = () => {
-      reconnectAttempt = 0;
-      // Gateway sends connect.challenge event first, then we respond with connect
-      // sendConnect() is called from handleMessage when challenge arrives
-      // But some gateways may not send a challenge — use a timeout fallback
-      setTimeout(() => {
-        if (!connected && ws && ws.readyState === WebSocket.OPEN) {
-          sendConnect();
-        }
-      }, 2000);
-    };
-
-    ws.onmessage = (event) => {
-      try {
-        const data = JSON.parse(event.data);
-        handleMessage(data);
-      } catch (e) {
-        console.error('Parse error:', e, event.data);
-      }
-    };
-
-    ws.onclose = (event) => {
-      connected = false;
-      setConnectionStatus('disconnected', event.reason || `Code ${event.code}`);
-      stopHeartbeat();
-      if (!event.wasClean) {
-        scheduleReconnect();
-      }
-    };
-
-    ws.onerror = () => {
-      setConnectionStatus('disconnected', 'Connection error');
-    };
   }
 
   function uuidv4() {
@@ -161,18 +164,36 @@
   }
 
   function wsSend(method, params = {}) {
-    if (!ws || ws.readyState !== WebSocket.OPEN) return null;
+    if (!wsConnected) return null;
     const id = uuidv4();
-    ws.send(JSON.stringify({ type: 'req', id, method, params }));
+    const msg = JSON.stringify({ type: 'req', id, method, params });
+    invoke('ws_send_raw', { message: msg }).catch(e => {
+      console.error('ws_send_raw failed:', e);
+    });
     return id;
   }
 
-  function disconnect() {
-    if (ws) {
-      ws.close(1000, 'User disconnect');
-      ws = null;
-    }
+  function rpcCall(method, params = {}) {
+    return new Promise((resolve, reject) => {
+      const id = wsSend(method, params);
+      if (!id) { reject(new Error('not connected')); return; }
+      const timer = setTimeout(() => {
+        pendingRpc.delete(id);
+        reject(new Error(`timeout: ${method}`));
+      }, 30000);
+      pendingRpc.set(id, { resolve, reject, timer });
+    });
+  }
+
+  async function disconnect() {
+    try {
+      await invoke('ws_disconnect');
+    } catch (_) {}
+    wsConnected = false;
     connected = false;
+    sessionKey = null;
+    for (const [, p] of pendingRpc) { clearTimeout(p.timer); p.reject(new Error('disconnected')); }
+    pendingRpc.clear();
     setConnectionStatus('disconnected');
     stopHeartbeat();
   }
@@ -219,7 +240,7 @@
   function startHeartbeat() {
     stopHeartbeat();
     heartbeatTimer = setInterval(() => {
-      if (ws && ws.readyState === WebSocket.OPEN) {
+      if (wsConnected) {
         wsSend('ping', {});
       }
     }, HEARTBEAT_INTERVAL);
@@ -230,23 +251,43 @@
     heartbeatTimer = null;
   }
 
-  function sendConnect() {
+  async function sendConnect(nonce) {
     const settings = loadSettings();
     const connectParams = {
       minProtocol: 3,
       maxProtocol: 3,
       client: {
-        id: 'openclaw-desktop-v2',
-        version: '2.0.0',
-        platform: 'desktop',
-        mode: 'webchat'
+        id: 'openclaw-control-ui',
+        version: '1.0.0',
+        platform: 'win32',
+        mode: 'ui',
+        deviceFamily: 'Windows'
       },
       role: 'operator',
-      scopes: ['operator.admin', 'operator.read', 'operator.write', 'operator.approvals', 'operator.pairing'],
+      scopes: ['operator.admin'],
       caps: ['tool-events'],
       userAgent: 'OpenClaw Desktop v2',
       locale: 'en-US'
     };
+    if (nonce) {
+      try {
+        const deviceData = await invoke('sign_device_v3', {
+          req: {
+            clientId: 'openclaw-control-ui',
+            clientMode: 'ui',
+            role: 'operator',
+            scopes: ['operator.admin'],
+            token: settings.token || '',
+            nonce: nonce,
+            platform: 'win32',
+            deviceFamily: 'Windows'
+          }
+        });
+        connectParams.device = deviceData;
+      } catch (e) {
+        console.error('Failed to sign device capability:', e);
+      }
+    }
     if (settings.token) {
       connectParams.auth = { token: settings.token };
     } else if (settings.password) {
@@ -255,13 +296,51 @@
     wsSend('connect', connectParams);
   }
 
+  async function setupSession() {
+    let key = null;
+    try {
+      const res = await rpcCall('sessions.resolve', { label: 'desktop-session' });
+      key = res?.key;
+    } catch {
+      // Session not found — try creating
+    }
+    if (!key) {
+      try {
+        const res = await rpcCall('sessions.create', { label: 'desktop-session' });
+        key = res?.key;
+      } catch (e) {
+        addSystemMessage(`Session setup failed: ${e.message}`);
+        return;
+      }
+    }
+    if (!key) {
+      addSystemMessage('Session setup failed: no key in response');
+      return;
+    }
+    sessionKey = key;
+    wsSend('chat.history', { sessionKey, limit: 50 });
+  }
+
   // ---- Message handling ----
   function handleMessage(data) {
     // Gateway protocol: { type: "res", id, ok, payload/error } or { type: "event", event, payload }
 
+    // Route responses to pending rpcCall promises
+    if (data.type === 'res' && data.id && pendingRpc.has(data.id)) {
+      const p = pendingRpc.get(data.id);
+      pendingRpc.delete(data.id);
+      clearTimeout(p.timer);
+      if (data.ok) {
+        p.resolve(data.payload);
+      } else {
+        p.reject(new Error(data.error?.message || JSON.stringify(data.error)));
+      }
+      return;
+    }
+
     // Handle connect.challenge — gateway sends this before we can send connect
     if (data.type === 'event' && data.event === 'connect.challenge') {
-      sendConnect();
+      sendConnect(data.payload.nonce);
       return;
     }
 
@@ -278,11 +357,10 @@
       }
 
       // Connect response
-      if (!connected && data.payload) {
+      if (!connected && data.payload && data.payload.type === 'hello-ok') {
         connected = true;
         setConnectionStatus('connected');
-        startHeartbeat();
-        wsSend('chat.history', { limit: 50 });
+        setupSession();
         return;
       }
 
@@ -315,7 +393,12 @@
 
     // Handle events
     if (data.type === 'event') {
-      if (data.event === 'chat') {
+      if (data.event === 'chat.delta') {
+        const payload = data.payload || {};
+        handleDelta(payload.delta || payload.text || extractText(payload));
+      } else if (data.event === 'chat.completion') {
+        handleFinalMessage(data.payload || {});
+      } else if (data.event === 'chat') {
         handleChatEvent(data.payload);
       }
       return;
@@ -356,20 +439,17 @@
         finishStreaming();
         break;
 
+      case 'run_complete':
+        finishStreaming();
+        break;
+
       default:
         // Legacy format fallback
         if (params.type === 'delta' || params.event === 'delta') {
           handleDelta(params.text || params.delta?.text || '');
         } else if (params.type === 'final' || params.type === 'message') {
           handleFinalMessage(params);
-        }
-      case 'run_complete':
-        finishStreaming();
-        break;
-
-      default:
-        // Try to extract text from unknown events
-        if (params.text && !params.role) {
+        } else if (params.text && !params.role) {
           handleDelta(params.text);
         } else if (params.content && params.role === 'assistant') {
           handleFinalMessage(params);
@@ -577,6 +657,7 @@
     // Build params — deliver:false means we receive the response via events
     const params = {
       message: text || '',
+      sessionKey,
       deliver: false,
       idempotencyKey: uuidv4(),
     };
@@ -598,7 +679,7 @@
 
   function abortGeneration() {
     if (connected) {
-      wsSend('chat.abort', currentRunId ? { runId: currentRunId } : {});
+      wsSend('chat.abort', currentRunId ? { sessionKey, runId: currentRunId } : { sessionKey });
     }
     finishStreaming();
   }
@@ -840,7 +921,9 @@
   });
 
   // ---- Init ----
-  function init() {
+  async function init() {
+    await listenersReady;
+    console.log('[init] Tauri event listeners registered, connecting...');
     messageInput.focus();
     connect();
   }

@@ -233,11 +233,13 @@
     if (typeof msg.content === 'string') return msg.content;
     if (typeof msg.text === 'string') return msg.text;
     if (Array.isArray(msg.content)) {
-      const text = msg.content
-        .filter(c => c.type === 'text')
-        .map(c => c.text)
-        .join('\n');
-      if (text) return text;
+      const parts = [];
+      for (const c of msg.content) {
+        // Skip tool blocks — they don't contain displayable text
+        if (c.type === 'toolCall' || c.type === 'tool_use' || c.type === 'toolResult' || c.type === 'tool_result') continue;
+        if (c.text) parts.push(c.text);
+      }
+      if (parts.length > 0) return parts.join('\n');
     }
     // Try nested message object (gateway history format)
     if (msg.message) return extractText(msg.message);

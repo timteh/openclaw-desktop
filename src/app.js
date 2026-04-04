@@ -1344,8 +1344,12 @@
       }
       if (e.key === 'Enter') {
         e.preventDefault();
-        if (filtered[cmdHighlight]) selectCommand(filtered[cmdHighlight]);
-        return;
+        if (filtered[cmdHighlight]) {
+          selectCommand(filtered[cmdHighlight]);
+          return;
+        }
+        closeCommandMenu();
+        // Fall through to sendMessage for unrecognized slash text
       }
       if (e.key === 'Escape') {
         e.preventDefault();

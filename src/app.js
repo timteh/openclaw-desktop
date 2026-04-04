@@ -518,12 +518,13 @@
       finishStreaming();
     } else if (content) {
       // Standalone final message
+      hideTypingIndicator();
       const welcome = chatMessages.querySelector('.welcome-msg');
       if (welcome) welcome.remove();
       addAssistantMessage(content);
-    } else {
-      finishStreaming();
     }
+    // If no content and no streaming in progress, keep typing indicator alive —
+    // the agent is likely doing tool calls and will send text later.
   }
 
   function handleToolCall(params) {

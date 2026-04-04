@@ -28,6 +28,7 @@
   let userScrolled = false;
   let pendingAttachments = [];
   let currentRunId = null;
+  let typingIndicator = null;
   const pendingRpc = new Map();
 
   // ---- DOM refs ----
@@ -418,9 +419,9 @@
       const evtPayload = data.payload || {};
       const evtSessionKey = evtPayload.sessionKey;
 
-      // Filter: only show chat/message/tool events for the CURRENT session
+      // Filter: only show chat/message/tool/agent events for the CURRENT session
       if (data.event === 'chat' || data.event === 'chat.delta' || data.event === 'chat.completion'
-          || data.event === 'session.message' || data.event === 'session.tool') {
+          || data.event === 'session.message' || data.event === 'session.tool' || data.event === 'agent') {
         if (evtSessionKey && sessionKey && evtSessionKey !== sessionKey) return;
       }
 
@@ -490,6 +491,7 @@
 
   function handleDelta(text, replace) {
     if (!text) return;
+    hideTypingIndicator();
 
     // Clear welcome message
     const welcome = chatMessages.querySelector('.welcome-msg');
@@ -587,7 +589,25 @@
     }
   }
 
+  function showTypingIndicator() {
+    if (typingIndicator) return;
+    typingIndicator = document.createElement('div');
+    typingIndicator.className = 'msg msg-assistant';
+    typingIndicator.innerHTML = `
+      <div class="msg-label msg-label-assistant">🐾 Claw</div>
+      <div class="typing-dots">
+        <span class="dot"></span><span class="dot"></span><span class="dot"></span>
+      </div>`;
+    chatMessages.appendChild(typingIndicator);
+    autoScroll();
+  }
+
+  function hideTypingIndicator() {
+    if (typingIndicator) { typingIndicator.remove(); typingIndicator = null; }
+  }
+
   function finishStreaming() {
+    hideTypingIndicator();
     if (streamingMsgEl) {
       const contentEl = streamingMsgEl.querySelector('.msg-content');
       contentEl.classList.remove('streaming-cursor');
@@ -806,6 +826,7 @@
     }
 
     wsSend('chat.send', params);
+    showTypingIndicator();
 
     // Clear input
     messageInput.value = '';

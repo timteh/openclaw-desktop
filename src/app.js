@@ -404,13 +404,21 @@
 
     // Handle events
     if (data.type === 'event') {
+      const evtPayload = data.payload || {};
+      const evtSessionKey = evtPayload.sessionKey;
+
+      // Filter: only show chat/message/tool events for the CURRENT session
+      if (data.event === 'chat' || data.event === 'chat.delta' || data.event === 'chat.completion'
+          || data.event === 'session.message' || data.event === 'session.tool') {
+        if (evtSessionKey && sessionKey && evtSessionKey !== sessionKey) return;
+      }
+
       if (data.event === 'chat.delta') {
-        const payload = data.payload || {};
-        handleDelta(payload.delta || payload.text || extractText(payload));
+        handleDelta(evtPayload.delta || evtPayload.text || extractText(evtPayload));
       } else if (data.event === 'chat.completion') {
-        handleFinalMessage(data.payload || {});
+        handleFinalMessage(evtPayload);
       } else if (data.event === 'chat') {
-        handleChatEvent(data.payload);
+        handleChatEvent(evtPayload);
       }
       return;
     }

@@ -301,6 +301,12 @@ fn mime_from_ext(path: &str) -> String {
     .into()
 }
 
+#[tauri::command]
+async fn open_url(app: tauri::AppHandle, url: String) -> Result<(), String> {
+    use tauri_plugin_shell::ShellExt;
+    app.shell().open(&url, None).map_err(|e| e.to_string())
+}
+
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
@@ -318,6 +324,7 @@ fn main() {
             ws_disconnect,
             read_file_base64,
             sign_device_v3,
+            open_url,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

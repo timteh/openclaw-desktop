@@ -838,31 +838,9 @@
     const resolved = url && url.startsWith('http') ? url : resolveMediaUrl(url);
     if (!resolved) { addSystemMessage('Cannot download: unknown path'); return; }
     try {
-      // Try fetch + blob download first
-      const response = await fetch(resolved);
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      const blob = await response.blob();
-      const blobUrl = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = blobUrl;
-      a.download = fileName || resolved.split('/').pop() || 'download';
-      a.style.display = 'none';
-      document.body.appendChild(a);
-      a.click();
-      setTimeout(() => { a.remove(); URL.revokeObjectURL(blobUrl); }, 1000);
+      await invoke('open_url', { url: resolved });
     } catch (e) {
-      // Fallback: open in system browser via Tauri opener or window.open
-      try {
-        if (window.__TAURI__?.opener?.openUrl) {
-          await window.__TAURI__.opener.openUrl(resolved);
-          addSystemMessage(`Opening ${fileName || 'file'} in browser...`);
-        } else {
-          window.open(resolved, '_blank');
-          addSystemMessage(`Opening ${fileName || 'file'} in browser...`);
-        }
-      } catch (e2) {
-        addSystemMessage(`Download failed: ${e.message}`);
-      }
+      addSystemMessage(`Download failed: ${e.message}`);
     }
   }
 

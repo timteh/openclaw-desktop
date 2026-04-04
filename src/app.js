@@ -226,16 +226,23 @@
     }
   }
 
-  // Extract text from message content (handles string or content array)
+  // Extract text from message content (handles string, content array, or nested message)
   function extractText(msg) {
+    if (!msg) return '';
+    if (typeof msg === 'string') return msg;
     if (typeof msg.content === 'string') return msg.content;
     if (typeof msg.text === 'string') return msg.text;
     if (Array.isArray(msg.content)) {
-      return msg.content
+      const text = msg.content
         .filter(c => c.type === 'text')
         .map(c => c.text)
         .join('\n');
+      if (text) return text;
     }
+    // Try nested message object (gateway history format)
+    if (msg.message) return extractText(msg.message);
+    // Try delta/chunk fields
+    if (msg.delta) return extractText(msg.delta);
     return '';
   }
 
@@ -381,10 +388,12 @@
         if (welcome) welcome.remove();
         
         data.payload.messages.forEach(msg => {
+          const text = extractText(msg);
+          if (!text) return; // skip empty messages
           if (msg.role === 'user') {
-            addUserMessage(extractText(msg), msg.attachments);
+            addUserMessage(text, msg.attachments);
           } else if (msg.role === 'assistant') {
-            addAssistantMessage(extractText(msg));
+            addAssistantMessage(text);
           }
         });
         scrollToBottom(true);

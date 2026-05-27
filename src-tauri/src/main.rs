@@ -15,7 +15,7 @@ use tauri::Emitter;
 use tokio::sync::Mutex;
 use tokio_tungstenite::{connect_async, tungstenite::{Message, client::IntoClientRequest}};
 use sha2::{Sha256, Digest};
-use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use base64::engine::general_purpose::{URL_SAFE_NO_PAD, STANDARD};
 
 type WsSink = Arc<Mutex<Option<futures_util::stream::SplitSink<
     tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>,
@@ -216,33 +216,50 @@ struct SignDeviceRequest {
     device_family: String,
 }
 
+fn load_openclaw_identity() -> Option<(String, SigningKey)> {
+    let home = std::env::var("USERPROFILE").or_else(|_| std::env::var("HOME")).ok()?;
+    let path = std::path::Path::new(&home).join(".openclaw/identity/device.json");
+    let content = std::fs::read_to_string(&path).ok()?;
+    let parsed: serde_json::Value = serde_json::from_str(&content).ok()?;
+    let device_id = parsed["deviceId"].as_str()?.to_string();
+    let pem = parsed["privateKeyPem"].as_str()?;
+    let pem_body: String = pem.lines().filter(|l| !l.starts_with("-----")).collect();
+    let der = STANDARD.decode(&pem_body).ok()?;
+    // Ed25519 PKCS#8: 16-byte header + 32-byte raw key
+    if der.len() >= 48 {
+        let mut kb = [0u8; 32];
+        kb.copy_from_slice(&der[16..48]);
+        Some((device_id, SigningKey::from_bytes(&kb)))
+    } else {
+        None
+    }
+}
+
 #[tauri::command]
 async fn sign_device_v3(req: SignDeviceRequest) -> Result<DeviceSignaturePayload, String> {
-    let key_path = std::env::temp_dir().join("openclaw_identity.hex");
-    
-    let signing_key = std::fs::read_to_string(&key_path)
-        .ok()
-        .and_then(|h| hex::decode(h.trim()).ok())
-        .and_then(|b| if b.len() == 32 {
-            let mut arr = [0u8; 32];
-            arr.copy_from_slice(&b);
-            Some(SigningKey::from_bytes(&arr))
-        } else {
-            None
-        })
-        .unwrap_or_else(|| {
-            let mut csprng = OsRng;
-            let k = SigningKey::generate(&mut csprng);
-            let _ = std::fs::write(&key_path, hex::encode(k.to_bytes()));
-            k
-        });
+    let (device_id, signing_key) = load_openclaw_identity().unwrap_or_else(|| {
+        let key_path = std::env::temp_dir().join("openclaw_identity.hex");
+        let sk = std::fs::read_to_string(&key_path)
+            .ok()
+            .and_then(|h| hex::decode(h.trim()).ok())
+            .and_then(|b| if b.len() == 32 {
+                let mut arr = [0u8; 32];
+                arr.copy_from_slice(&b);
+                Some(SigningKey::from_bytes(&arr))
+            } else { None })
+            .unwrap_or_else(|| {
+                let mut csprng = OsRng;
+                let k = SigningKey::generate(&mut csprng);
+                let _ = std::fs::write(&key_path, hex::encode(k.to_bytes()));
+                k
+            });
+        let mut hasher = Sha256::new();
+        hasher.update(sk.verifying_key().as_bytes());
+        (hex::encode(hasher.finalize()), sk)
+    });
 
     let public_key = signing_key.verifying_key();
     let pk_bytes = public_key.as_bytes();
-    
-    let mut hasher = Sha256::new();
-    hasher.update(pk_bytes);
-    let device_id = hex::encode(hasher.finalize());
     
     let signed_at = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -264,6 +281,14 @@ async fn sign_device_v3(req: SignDeviceRequest) -> Result<DeviceSignaturePayload
     );
     
     let signature = signing_key.sign(payload_str.as_bytes());
+
+    // Debug: verify our own signature and print payload
+    use ed25519_dalek::Verifier;
+    let verify = public_key.verify(payload_str.as_bytes(), &signature);
+    println!("[sign] device_id: {}", device_id);
+    println!("[sign] payload: {}", payload_str);
+    println!("[sign] self-verify: {:?}", verify);
+    println!("[sign] pubkey(b64): {}", URL_SAFE_NO_PAD.encode(pk_bytes));
 
     Ok(DeviceSignaturePayload {
         device_id,

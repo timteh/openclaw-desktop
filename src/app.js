@@ -287,19 +287,19 @@
       try {
         const deviceData = await invoke('sign_device_v3', {
           req: {
-            clientId: 'openclaw-control-ui',
-            clientMode: 'ui',
-            role: 'operator',
-            scopes: ['operator.admin', 'operator.read', 'operator.write', 'operator.approvals', 'operator.pairing'],
+            clientId: connectParams.client.id,
+            clientMode: connectParams.client.mode,
+            role: connectParams.role,
+            scopes: connectParams.scopes,
             token: settings.token || '',
             nonce: nonce,
-            platform: 'win32',
-            deviceFamily: 'Windows'
+            platform: connectParams.client.platform,
+            deviceFamily: connectParams.client.deviceFamily,
           }
         });
         connectParams.device = deviceData;
       } catch (e) {
-        console.error('Failed to sign device capability:', e);
+        console.error('Device signing failed:', e);
       }
     }
     if (settings.token) {
